@@ -1,0 +1,232 @@
+<!DOCTYPE html>
+
+<html>
+
+    <head>
+        <title>Binding</title>
+        <link href='https://fonts.googleapis.com/css?family=Open+Sans' rel='stylesheet' type='text/css'>
+        <style>
+            body {
+                font-family: Open Sans;
+            }
+            .outer {
+                border: 1px solid black;
+                border-radius: 4px;
+                margin: 4px;
+                padding: 8px;
+                background: #bbffaa;
+            }
+            .inner {
+                padding-left: 16px;
+                
+            }
+        </style>
+        
+        <script>
+        
+        
+            var BIND = {};
+            
+            BIND.isArray = function(obj) { return Array.isArray(obj); }
+            BIND.isObject = function(obj) { return (typeof obj === 'object'); }
+            
+            BIND.Binder = function() {
+                this._models = {};
+                this._repeatsByPath = {};
+            };
+            
+            BIND.Binder.prototype = {
+            
+                makeModel: function(name, obj) {
+                    obj = obj ? obj : {};
+                    var model = this._makeModel(name, obj);
+                    this._models[name] = model;
+                    return model;
+                },
+                
+                attachToDom: function(domElement) {
+                    domElement = domElement ? domElement : document.body;
+                    this._parseRepeats(domElement);
+                },
+                
+                _get: function(obj, path) {
+                    var arr = path.split('.');
+                    for (var i = 0; i < arr.length; i++) {
+                        var tokens = [];
+                        var regex = /(.*?)\[(\d+)\]/g; 
+                        while ((m = regex.exec(arr[i])) !== null) {
+                            if (m.index === regex.lastIndex) {
+                                regex.lastIndex++;
+                            }
+                            if (m[1]) {
+                                tokens.push(m[1]);
+                            }
+                            if (m[2]) {
+                                tokens.push(parseInt(m[2]));
+                            }
+                        }
+                        if (tokens.length == 0) {
+                            obj = obj[arr[i]];
+                        } else {
+                            for (var j = 0; j < tokens.length; j++) {
+                                obj = obj[tokens[j]];
+                            }
+                        }
+                    }
+                    return obj;
+                },
+                
+                _makeModel: function(path, obj) {
+                
+                    if (!BIND.isObject(obj)) {
+                        return obj;
+                    }
+                    
+                    for (var prop in obj) {
+                        obj[prop] = this._makeModel(this._makePath(path, obj, prop), obj[prop]);
+                    }
+                
+                    var context = this;
+                    var handler = {
+                        set : function(obj, prop, value) {
+                            var newPath = context._makePath(path, obj, prop);
+                            obj[prop] = context._makeModel(newPath, value);
+                            context._onModelChange(newPath);
+                            return true;
+                        }
+                    };
+                    
+                    return new Proxy(obj, handler);
+                },
+                
+                _makePath: function(path, obj, prop) {
+                    if (BIND.isArray(obj) && !isNaN(parseInt(prop))) {
+                        return path + '[' + prop + ']';
+                    } else {
+                        return path + '.' + prop;
+                    }
+                },
+                
+                _onModelChange: function(path) {
+                    console.log('>> ' + path);
+                    
+                    // Helper function for clearing all clones for a given repeat
+                    var clearClones = function(repeat) {
+                        for (var i = 0; i < repeat.clones.length; i++) {
+                            repeat.clones[i].parentNode.removeChild(repeat.clones[i]);
+                        }
+                        repeat.clones = [];
+                    }
+                
+                    var repeat = this._repeatsByPath[path];
+                    if (repeat) {
+                        // Exact match, this is most likely an 'assign'
+                        clearClones(repeat);
+                        this._applyRepeat(repeat);
+                    } else {
+                        // Special case #1, check for Array.push
+                        var match = path.match(/(.+)(\[(\d+)\])/);
+                        if (match) {
+                            var truncatedPath = match[1];
+                            var repeat = this._repeatsByPath[truncatedPath];
+                            if (repeat) {
+                                var index = parseInt(match[3]);
+                                if (index == repeat.length) {
+                                    this._applyRepeat(repeat, repeat.length);
+                                }
+                            }
+                        }
+                        // Default case, the length changed
+                        var match = path.match(/(.+)\.length/);
+                        if (match) {
+                            var truncatedPath = match[1];
+                            var repeat = this._repeatsByPath[truncatedPath];
+                            if (repeat) {
+                                var list =  this._get(this._models, repeat.binding);
+                                if (repeat.length != list.length) { // Note: Only if we didn't already handle this as a special case
+                                    clearClones(repeat);
+                                    this._applyRepeat(repeat);
+                                }
+                            }
+                        }
+                    }
+                },
+                
+                _applyRepeat: function(repeat, firstIndex) {
+                    var list =  this._get(this._models, repeat.binding);
+                    repeat.length = list.length;
+                    
+                    for (var i = firstIndex ? firstIndex : 0; i < list.length; i++) {
+                        var item = list[i];
+                        
+                        var clone = repeat.domRepeat.cloneNode(true);
+                        repeat.clones.push(clone);
+                        repeat.domParent.appendChild(clone);
+                        
+                        var repeats = this._parseRepeats(clone, repeat.binding + '[' + i + ']', true);
+                        for (var j = 0; j < repeats.length; j++) {
+                            this._applyRepeat(repeats[j]);
+                        }
+                    }
+                },
+                
+                _parseRepeats: function(domElement, basePath, ignoreFirst) {
+                    if (domElement.dataset.repeat && !ignoreFirst) {
+                        var repeat = JSON.parse(domElement.dataset.repeat);
+                        if (repeat.binding.startsWith('*')) {
+                            repeat.binding = repeat.binding.replace('*', basePath);
+                        }   
+                        repeat.domRepeat = domElement;
+                        repeat.domParent = domElement.parentNode;
+                        repeat.clones = [];
+                        this._repeatsByPath[repeat.binding] = repeat;
+                        domElement.parentNode.removeChild(domElement);
+                        return [repeat];
+                    }
+                    
+                    var repeats = [];
+                    for (var i = 0; i < domElement.children.length; i++) {
+                        var innerRepeats = this._parseRepeats(domElement.children[i], basePath);
+                        Array.prototype.push.apply(repeats, innerRepeats);
+                    }
+                    
+                    return repeats;
+                },
+            };
+            
+            
+            
+            
+                
+        
+        
+            function init() {
+            
+                var binder = new BIND.Binder();
+                binder.attachToDom();
+                var model = binder.makeModel('mymodel');
+                
+
+                
+                model.list = [{innerList: [1, 2, 3]}, {innerList: [4, 5, 6]}];
+                model.list[1].innerList.push(4);
+                model.list.push({innerList: [2, 3]});
+
+            }
+        
+        </script>
+    </head>
+    
+    <body onload='init()'>
+        
+    
+        <div class='outer' data-repeat='{ "binding" : "mymodel.list" }'>
+            <div>outerlist</div>
+            <div class='inner' data-repeat='{ "binding" : "*.innerList"}'>
+                innerList
+            </div>
+        <div>
+        
+    </body>
+
+</html>
