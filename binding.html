@@ -388,6 +388,9 @@
         <div>
             <div data-repeat='{ "binding" : "mymodel.list" }' data-bindings='{ "binding" : "innerText<-*" }'></div>
         </div>
+        <select data-bindings='{ "binding" :  "selectedIndex->mymodel.index" }'>
+            <option data-repeat='{ "binding" : "mymodel.list" }' data-bindings='{ "binding" : "text<-*" }'></option>
+        </select>
     </body>
 
 </html>
