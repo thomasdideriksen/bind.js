@@ -46,16 +46,46 @@
             BIND.Binder.prototype = {
             
                 makeModel: function(name, obj) {
+                    if (obj && !BIND.isObject(obj)) {
+                        throw 'Invalid model object';
+                    }
                     obj = obj ? obj : {};
                     var model = this._makeModel(name, obj);
                     this._models[name] = model;
+                    
+                    for (var path in this._repeatsByPath) {
+                        if (path.startsWith(name)) {
+                            var repeats = this._repeatsByPath[path]; 
+                            for (var i = 0; i < repeats.length; i++) {
+                                this._applyRepeat(repeats[i]);
+                            }
+                        }
+                    }
+                    
+                    for (var path in this._bindingsByPath) {
+                        if (path.startsWith(name)) {
+                            var bindings = this._bindingsByPath[path];
+                            for (var i = 0; i < bindings.length; i++) {
+                                this._syncDom(bindings[i]);
+                            }
+                        }
+                    }
+                    
                     return model;
                 },
                 
                 attachToDom: function(domElement) {
                     domElement = domElement ? domElement : document.body;
-                    this._parseRepeats(domElement);
-                    this._parseBindings(domElement);
+                    
+                    var repeats = this._parseRepeats(domElement);
+                    for (var i = 0; i < repeats.length; i++) {
+                        this._applyRepeat(repeats[i]);
+                    }
+                    
+                    var bindings = this._parseBindings(domElement);
+                    for (var i = 0; i < bindings.length; i++) {
+                        this._syncDom(bindings[i]);
+                    }
                 },
                 
                 _getEx: function(obj, path) {
@@ -79,12 +109,12 @@
                         if (tokens.length == 0) {
                             parent = obj;
                             lastPropName = arr[i];
-                            obj = obj[arr[i]];
+                            obj = obj ? obj[arr[i]] : undefined;
                         } else {
                             for (var j = 0; j < tokens.length; j++) {
                                 parent = obj;
                                 lastPropName = tokens[j]
-                                obj = obj[tokens[j]];
+                                obj = obj ? obj[tokens[j]] : undefined;
                             }
                         }
                     }
@@ -267,10 +297,7 @@
                         var bindings = JSON.parse(domElement.dataset.bindings);
                         bindings = BIND.isArray(bindings) ? bindings : [bindings];
                         for (var i = 0; i < bindings.length; i++) {
-                            if (bindings[i].binding.startsWith('*')) {
-                                bindings[i].binding.replace('*', basePath);
-                            }
-                            var match = bindings[i].binding.match(/\s*([A-Za-z\.0-9_]+)\s*(<-|->|<->)\s*([A-Za-z\.0-9_]+)\s*/);
+                            var match = bindings[i].binding.match(/\s*([A-Za-z\.0-9_]+)\s*(<-|->|<->)\s*([A-Za-z\.0-9_\*]+)\s*/);
                             if (match) {
                                 var binding = {};
                                 binding.domElement = domElement;
@@ -278,6 +305,9 @@
                                 binding.path = match[3];
                                 binding.events = bindings[i].events ? bindings[i].events.split(',') : [];
                                 binding.events.forEach( function(e, i, a) { a[i] = a[i].trim(); } );
+                                if (binding.path.startsWith('*')) {
+                                    binding.path = binding.path.replace('*', basePath);
+                                }
                                 switch (match[2]) {
                                     case '->': binding.direction = BIND.DIRECTION_ONEWAY_TO_MODEL; break;
                                     case '<-': binding.direction = BIND.DIRECTION_ONEWAY_TO_DOM; break;
@@ -312,25 +342,20 @@
                 
         
         
+        
+            var _model;
             function init() {
             
+                var m = {};
+                m.list = ['first', 'second'];
+                
                 var binder = new BIND.Binder();
                 binder.attachToDom();
-                var model = binder.makeModel('mymodel');
+                _model = binder.makeModel('mymodel', m);
                 
-                document.getElementById('button').addEventListener('click', function() {
-                    model.text = Date.now();
-                    model.list.push(Date.now());
-                });
                 
-
+                _model.list.push('thomas', 'dideriksen');
                 
-                model.list = [{innerList: [1, 2, 3]}, {innerList: [4, 5, 6]}];
-                model.list[1].innerList.push(4);
-                model.list.push({innerList: [2, 3]});
-                model.list.push({innerList: [2, 3]});
-                model.list.push({innerList: [{innerList: [2, 3, 4, 5, 6]}, 3, 5]});
-                model.text = 'thomas';
 
             }
         
@@ -338,7 +363,12 @@
     </head>
     
     <body onload='init()'>
+    
+        <div>
+            <div data-repeat='{ "binding" : "mymodel.list" }' data-bindings='{ "binding" : "innerText<-*" }'>hello</div>
+        </div>
         
+        <!--
         <button id='button'>test</button>
         
         <input type='text' data-bindings='{ "binding" : "value->mymodel.name", "events" : "change, input" }'></input>
@@ -354,7 +384,7 @@
                 </div>
             </div>
         </div>
-        
+        -->
         
         
         
