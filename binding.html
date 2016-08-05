@@ -140,8 +140,9 @@
                     var handler = {
                         set : function(obj, prop, value) {
                             var newPath = context._makePath(path, obj, prop);
+                            var oldValue = obj[prop];
                             obj[prop] = context._makeModel(newPath, value);
-                            context._onModelChange(newPath);
+                            context._onModelChange(newPath, oldValue, value);
                             return true;
                         }
                     };
@@ -157,8 +158,8 @@
                     }
                 },
                 
-                _onModelChange: function(path) {
-                    console.log('>> ' + path);
+                _onModelChange: function(path, oldValue, newValue) {
+                    console.log('>> ' + path + ' [' + oldValue + '] -> [' + newValue + ']');
                     
                     // Helper function for clearing all clones for a given repeat
                     var clearClones = function(repeat) {
@@ -207,10 +208,12 @@
                         }
                     }
                     
-                    var bindings = this._bindingsByPath[path];
-                    if (bindings) {
-                        for (var i = 0; i < bindings.length; i++) {
-                            this._syncDom(bindings[i]);
+                    for (var candidate in this._bindingsByPath) {
+                        if (candidate.startsWith(path)) {
+                            var bindings = this._bindingsByPath[candidate];
+                            for (var i = 0; i < bindings.length; i++) {
+                                this._syncDom(bindings[i]);
+                            }
                         }
                     }
                 },
@@ -379,6 +382,7 @@
     </head>
     
     <body onload='init()'>
+        <div><span data-bindings='{ "binding" : "textContent<-mymodel.list.length" }'></span><span> item(s) in list</span></div>
         <input type='text' data-bindings='{ "binding" : "value<->mymodel.newValue", "events" : "change, input" }'></input>
         <button data-event-handlers='{ "click" : "mymodel.func" }'>add</button>
         <div>
