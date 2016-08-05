@@ -18,6 +18,9 @@
             }
             .inner {
                 padding-left: 16px;
+                border: 1px solid;
+                min-height: 30px;
+                min-width: 20px;
                 
             }
         </style>
@@ -30,9 +33,14 @@
             BIND.isArray = function(obj) { return Array.isArray(obj); }
             BIND.isObject = function(obj) { return (typeof obj === 'object'); }
             
+            BIND.DIRECTION_ONEWAY_TO_DOM = 1;
+            BIND.DIRECTION_ONEWAY_TO_MODEL = 2;
+            BIND.DIRECTION_TWOWAY = 3;
+            
             BIND.Binder = function() {
                 this._models = {};
                 this._repeatsByPath = {};
+                this._bindingsByPath = {};
             };
             
             BIND.Binder.prototype = {
@@ -47,10 +55,13 @@
                 attachToDom: function(domElement) {
                     domElement = domElement ? domElement : document.body;
                     this._parseRepeats(domElement);
+                    this._parseBindings(domElement);
                 },
                 
-                _get: function(obj, path) {
+                _getEx: function(obj, path) {
                     var arr = path.split('.');
+                    var parent;
+                    var lastPropName;
                     for (var i = 0; i < arr.length; i++) {
                         var tokens = [];
                         var regex = /(.*?)\[(\d+)\]/g; 
@@ -66,14 +77,30 @@
                             }
                         }
                         if (tokens.length == 0) {
+                            parent = obj;
+                            lastPropName = arr[i];
                             obj = obj[arr[i]];
                         } else {
                             for (var j = 0; j < tokens.length; j++) {
+                                parent = obj;
+                                lastPropName = tokens[j]
                                 obj = obj[tokens[j]];
                             }
                         }
                     }
-                    return obj;
+                    return {obj: obj,
+                            lastPropName: lastPropName,
+                            parent: parent};
+                },
+                
+                _get: function(obj, path) {
+                    var res = this._getEx(obj, path);
+                    return res.obj;
+                },
+                
+                _set: function(obj, path, value) {
+                    var res = this._getEx(obj, path);
+                    res.parent[res.lastPropName] = value;
                 },
                 
                 _makeModel: function(path, obj) {
@@ -118,21 +145,25 @@
                         repeat.clones = [];
                     }
                 
-                    var repeat = this._repeatsByPath[path];
-                    if (repeat) {
+                    var repeats = this._repeatsByPath[path];
+                    if (repeats) {
                         // Exact match, this is most likely an 'assign'
-                        clearClones(repeat);
-                        this._applyRepeat(repeat);
+                        for (var i = 0; i < repeats.length; i++) {
+                            clearClones(repeats[i]);
+                            this._applyRepeat(repeats[i]);
+                        }
                     } else {
                         // Special case #1, check for Array.push
                         var match = path.match(/(.+)(\[(\d+)\])/);
                         if (match) {
                             var truncatedPath = match[1];
-                            var repeat = this._repeatsByPath[truncatedPath];
-                            if (repeat) {
+                            var repeats = this._repeatsByPath[truncatedPath];
+                            if (repeats) {
                                 var index = parseInt(match[3]);
-                                if (index == repeat.length) {
-                                    this._applyRepeat(repeat, repeat.length);
+                                for (var i = 0; i < repeats.length; i++) {
+                                    if (index == repeats[i].length) {
+                                        this._applyRepeat(repeats[i], repeats[i].length);
+                                    }
                                 }
                             }
                         }
@@ -140,32 +171,50 @@
                         var match = path.match(/(.+)\.length/);
                         if (match) {
                             var truncatedPath = match[1];
-                            var repeat = this._repeatsByPath[truncatedPath];
-                            if (repeat) {
-                                var list =  this._get(this._models, repeat.binding);
-                                if (repeat.length != list.length) { // Note: Only if we didn't already handle this as a special case
-                                    clearClones(repeat);
-                                    this._applyRepeat(repeat);
+                            var repeats = this._repeatsByPath[truncatedPath];
+                            if (repeats) {
+                                for (var i = 0; i < repeats.length; i++) {
+                                    var list =  this._get(this._models, repeats[i].binding);
+                                    if (repeats[i].length != list.length) { // Note: Only if we didn't already handle this as a special case
+                                        clearClones(repeats[i]);
+                                        this._applyRepeat(repeats[i]);
+                                    }
                                 }
                             }
+                        }
+                    }
+                    
+                    var bindings = this._bindingsByPath[path];
+                    if (bindings) {
+                        for (var i = 0; i < bindings.length; i++) {
+                            this._syncModelToDom(bindings[i]);
                         }
                     }
                 },
                 
                 _applyRepeat: function(repeat, firstIndex) {
                     var list =  this._get(this._models, repeat.binding);
-                    repeat.length = list.length;
-                    
-                    for (var i = firstIndex ? firstIndex : 0; i < list.length; i++) {
-                        var item = list[i];
+                    if (list) {
                         
-                        var clone = repeat.domRepeat.cloneNode(true);
-                        repeat.clones.push(clone);
-                        repeat.domParent.appendChild(clone);
-                        
-                        var repeats = this._parseRepeats(clone, repeat.binding + '[' + i + ']', true);
-                        for (var j = 0; j < repeats.length; j++) {
-                            this._applyRepeat(repeats[j]);
+                        repeat.length = list.length;
+                        for (var i = firstIndex ? firstIndex : 0; i < list.length; i++) {
+                            var item = list[i];
+                            
+                            var clone = repeat.domRepeat.cloneNode(true);
+                            repeat.clones.push(clone);
+                            repeat.domParent.appendChild(clone);
+                            
+                            var path = repeat.binding + '[' + i + ']';
+                            
+                            var repeats = this._parseRepeats(clone, path, true);
+                            for (var j = 0; j < repeats.length; j++) {
+                                this._applyRepeat(repeats[j]);
+                            }
+                            
+                            var bindings = this._parseBindings(clone, path);
+                            for (var j = 0; j < bindings.length; j++) {
+                                this._syncModelToDom(bindings[j]);
+                            }
                         }
                     }
                 },
@@ -179,7 +228,10 @@
                         repeat.domRepeat = domElement;
                         repeat.domParent = domElement.parentNode;
                         repeat.clones = [];
-                        this._repeatsByPath[repeat.binding] = repeat;
+                        if (!this._repeatsByPath[repeat.binding]) {
+                            this._repeatsByPath[repeat.binding] = [];
+                        }
+                        this._repeatsByPath[repeat.binding].push(repeat);
                         domElement.parentNode.removeChild(domElement);
                         return [repeat];
                     }
@@ -191,6 +243,49 @@
                     }
                     
                     return repeats;
+                },
+                
+                _syncModelToDom: function(binding) {
+                    if (binding.direction === BIND.DIRECTION_ONEWAY_TO_DOM ||
+                        binding.direction === BIND.DIRECTION_TWOWAY) {
+                        var value = this._get(this._models, binding.path);
+                        this._set(binding.domElement, binding.domPath, value);
+                    }
+                },
+                
+                _parseBindings: function(domElement, basePath) {
+                    var result = [];
+                    if (domElement.dataset.bindings) {
+                        var bindings = JSON.parse(domElement.dataset.bindings);
+                        bindings = BIND.isArray(bindings) ? bindings : [bindings];
+                        for (var i = 0; i < bindings.length; i++) {
+                            if (bindings[i].binding.startsWith('*')) {
+                                bindings[i].binding.replace('*', basePath);
+                            }
+                            var match = bindings[i].binding.match(/\s*([A-Za-z\.0-9_]+)\s*(<-|->|<->)\s*([A-Za-z\.0-9_]+)\s*/);
+                            if (match) {
+                                var binding = {};
+                                binding.domElement = domElement;
+                                binding.domPath = match[1];
+                                binding.path = match[3];
+                                switch (match[2]) {
+                                    case '->': binding.direction = BIND.DIRECTION_ONEWAY_TO_MODEL; break;
+                                    case '<-': binding.direction = BIND.DIRECTION_ONEWAY_TO_DOM; break;
+                                    case '<->': binding.direction = BIND.DIRECTION_TWOWAY; break;
+                                }
+                                if (!this._bindingsByPath[binding.path]) {
+                                    this._bindingsByPath[binding.path] = [];
+                                }
+                                this._bindingsByPath[binding.path].push(binding);
+                                result.push(binding);
+                            }
+                        }
+                    }
+                    for (var i = 0; i < domElement.children.length; i++) {
+                        var innerResult = this._parseBindings(domElement.children[i], basePath);
+                        Array.prototype.push.apply(result, innerResult);
+                    }
+                    return result;
                 },
             };
             
@@ -206,11 +301,18 @@
                 binder.attachToDom();
                 var model = binder.makeModel('mymodel');
                 
+                document.getElementById('button').addEventListener('click', function() {
+                    model.text = Date.now();
+                });
+                
 
                 
                 model.list = [{innerList: [1, 2, 3]}, {innerList: [4, 5, 6]}];
                 model.list[1].innerList.push(4);
                 model.list.push({innerList: [2, 3]});
+                model.list.push({innerList: [2, 3]});
+                model.list.push({innerList: [{innerList: [2, 3, 4, 5, 6]}, 3, 5]});
+                model.text = 'thomas';
 
             }
         
@@ -219,13 +321,23 @@
     
     <body onload='init()'>
         
+        <button id='button'>test</button>
+        
+        <div data-bindings='{ "binding" : "innerText<-mymodel.list.length" }'></div>
     
-        <div class='outer' data-repeat='{ "binding" : "mymodel.list" }'>
-            <div>outerlist</div>
-            <div class='inner' data-repeat='{ "binding" : "*.innerList"}'>
-                innerList
-            </div>
         <div>
+            <div class='outer' data-repeat='{ "binding" : "mymodel.list" }'>
+                <div>outerlist</div>
+                <div class='inner' data-repeat='{ "binding" : "*.innerList"}'>
+                    innerList
+                    <div class='inner' data-repeat='{ "binding" : "*.innerList"}' data-bindings='{ "binding" : "innerText<-mymodel.text" }'></div>
+                </div>
+            </div>
+        </div>
+        
+        
+        
+        
         
     </body>
 
